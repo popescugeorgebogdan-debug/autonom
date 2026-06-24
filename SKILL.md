@@ -69,12 +69,33 @@ runs until the task is genuinely complete, pulling a web-LLM advisor in each ite
   discard the worktree (instant, zero `git reset --hard` risk to the user's real tree). An ephemeral venv/container
   per task extends this to dependency + OS-state isolation (nuke on fail/out-of-scope).
 
+## Wrong-success guards (the real risk is confident wrong-success, not loops)
+The no-interrupt model's dominant failure is "the agent successfully does the WRONG thing and still passes its own
+machine-checkable DONE." These four guards target exactly that:
+- **Assumption budget (CLARIFY-FIRST safety).** Every self-answer to a missing fact is recorded as a FIRST-CLASS
+  assumption in `assumptions[]` — never silently absorbed. Cap `assumption_budget` (default 3). If a CRITICAL-path
+  decision (target env, remote, account, dataset, prod-vs-staging) rests on an UNVALIDATED assumption → DONE FAILS
+  until it is validated by a cheap check, or — if unvalidatable from context — it is the ONE thing surfaced to the
+  user. Budget exceeded → halt + report.
+- **FALSE_DONE_ATTACK (machine-checkable ≠ correct).** Before accepting DONE, generate ≥3 concrete ways the DONE check
+  could PASS while the GOAL stays unmet (edited the test instead of the code, asserted on a stale fixture, mocked the
+  thing under test) and prove each does NOT apply. Survives the attack → real DONE; otherwise un-DONE, continue.
+- **Mutation-surface classification (shadow ≠ global safety).** The shadow worktree protects ONLY repo/filesystem state.
+  Tag every mutating action by surface — `repo · filesystem · network · cloud · SaaS/external-API · comms` — and require
+  an isolation/rollback strategy PER surface (shadow for repo; dry-run/staging target or scoped pre-auth for
+  network/cloud/SaaS/comms — `git reset` does NOT undo these). An action on an unisolated external surface without a
+  pre-authorized scope is `necessary?`-routed (FAIL if required for DONE).
+- **Pre-run design review (critical-assumption + blast-radius).** Before turn 1, self-review the plan and NAME the single
+  `critical_assumption` (what, if wrong, ruins the whole run) + the `blast_radius` (worst-case surfaces touched). Both go
+  in state; the critical_assumption is auto-added to `assumptions[]` for validation.
+
 ## State (single source of truth — atomic)
 Maintain `.autonom/state.json` from turn 1. Schema:
 `{task, done_condition, spec, scope_boundary, turn, last_updated, budget:{turns_max,tokens_max,usd_max,
 spent, web_lane_calls}, todos[], attempts:{intent_hash:n}, seen_errors:[hashes], applied_advice:[],
 deferred_ideas:[{idea,deferred_at}], monitors_armed:[{id,purpose,armed_at_turn}], intent,
-pending_gate_resolution, wakeup_failed, last_verified}`.
+pending_gate_resolution, wakeup_failed, last_verified, assumptions:[{q,self_answer,critical,validated}],
+assumption_budget, critical_assumption, blast_radius, mutation_surfaces}`.
 - **Atomic writes ONLY:** write `state.json.tmp` → fsync → `os.replace` (never a partial file). Same for the `ABORT` sentinel.
 - **Spec re-read from STATE at turn top, never from the prompt** (the prompt is a fuse).
 - **Compaction:** `seen_errors` + `applied_advice` FIFO-evict at 100; `deferred_ideas` SPLIT into `deferred_required` (NEVER evicted or expired) vs `deferred_optional` (cap 10, drop oldest + auto-expire 24h); at DONE surface top-3 optional AND every `deferred_required` prominently.
