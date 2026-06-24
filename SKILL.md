@@ -97,6 +97,23 @@ machine-checkable DONE." These four guards target exactly that:
   `critical_assumption` (what, if wrong, ruins the whole run) + the `blast_radius` (worst-case surfaces touched). Both go
   in state; the critical_assumption is auto-added to `assumptions[]` for validation.
 
+## Operational floors (zero-interrupt hygiene — final review pass)
+- **Non-interactive everything.** No human can answer a credential/confirm prompt mid-run → every spawned command runs
+  with `GIT_TERMINAL_PROMPT=0`, `SSH_ASKPASS=false`, `DEBIAN_FRONTEND=noninteractive`, GUI/editor disabled, and STDIN
+  CLOSED. If a child blocks waiting for input → write `.autonom/ABORT` (an unanswerable prompt is an invisible hang).
+- **Shadow-exec is the DEFAULT** for repo mutations (not experimental) — disable only with an explicit, logged opt-out;
+  until shadow is active the user's real tree is exposed.
+- **Re-check the dirty tree IMMEDIATELY before any `git reset --hard`** (the turn-top check races with a user edit between
+  check and reset); if dirty → ABORT, never reset over their work.
+- **Quarantined judge for fuzzy DONE.** The agent must not author AND grade — route a `fuzzy` rubric check to a SEPARATE
+  model call that sees ONLY the rubric + reject-example, never the solution/generation context.
+- **Rotating state backups.** Atomic writes don't survive a crash mid-write — keep the last 2 valid `state.json` backups,
+  validate JSON on resume, recover from the newest valid one.
+- **Error-journal is advisory, not gospel.** Apply an `.autonom/error_journal.json` recipe ONLY after a fresh root-cause
+  match confirms the SAME error this run; else it's a superstition engine (log each auto-apply as an assumption).
+- **Periodic context compaction.** Every N turns emit a minimal state summary and prune old delta chatter so a long
+  zero-interrupt run stays under the context window.
+
 ## State (single source of truth — atomic)
 Maintain `.autonom/state.json` from turn 1. Schema:
 `{task, done_condition, spec, scope_boundary, turn, last_updated, budget:{turns_max,tokens_max,usd_max,
