@@ -77,9 +77,11 @@ machine-checkable DONE." These four guards target exactly that:
   decision (target env, remote, account, dataset, prod-vs-staging) rests on an UNVALIDATED assumption → DONE FAILS
   until it is validated by a cheap check, or — if unvalidatable from context — it is the ONE thing surfaced to the
   user. Budget exceeded → halt + report.
-- **FALSE_DONE_ATTACK (machine-checkable ≠ correct).** Before accepting DONE, generate ≥3 concrete ways the DONE check
-  could PASS while the GOAL stays unmet (edited the test instead of the code, asserted on a stale fixture, mocked the
-  thing under test) and prove each does NOT apply. Survives the attack → real DONE; otherwise un-DONE, continue.
+- **FALSE_DONE checklist (machine-checkable ≠ correct).** Before accepting DONE, run a FIXED 6-pattern check — NOT
+  open-ended self-generation (a biased judge writes weak tests it can beat). Confirm NONE apply: (1) test/check edited
+  or stubbed instead of the code; (2) asserted on a stale / pre-existing fixture; (3) wrong environment or target;
+  (4) mocked the thing under test; (5) check passes on pre-existing state, not on YOUR change; (6) partial-DONE — one
+  criterion passes, others silently skipped. Any pattern applies → un-DONE, continue.
 - **Mutation-surface classification (shadow ≠ global safety).** The shadow worktree protects ONLY repo/filesystem state.
   Tag every mutating action by surface — `repo · filesystem · network · cloud · SaaS/external-API · comms` — and require
   an isolation/rollback strategy PER surface (shadow for repo; dry-run/staging target or scoped pre-auth for
@@ -101,13 +103,13 @@ assumption_budget, critical_assumption, blast_radius, mutation_surfaces}`.
 - **Compaction:** `seen_errors` + `applied_advice` FIFO-evict at 100; `deferred_ideas` SPLIT into `deferred_required` (NEVER evicted or expired) vs `deferred_optional` (cap 10, drop oldest + auto-expire 24h); at DONE surface top-3 optional AND every `deferred_required` prominently.
 - **Cross-run error journal** `.autonom/error_journal.json` (PERSISTS across invocations): `{error_hash: {recipe, fixed_n}}`. Turn-1 reads it and auto-applies known fixes (e.g. "port in use", "missing env var") instead of re-discovering them every run.
 
-## Autonomous-run robustness (ranked by impact)
+## Reference — robustness detail (read ON a GUARD-phase flag, NOT every turn; ranked by impact)
 1. **Stuck/loop detection — distinguish STUCK from PRODUCTIVE ITERATION.** Key the STOP counter on the
    **(intent + normalized_error/diagnostic)-hash** `sha256(intent + normalized_error)`, NOT the bare
    intent-hash. **INCREMENT** the strike count only when an attempt repeats a PRIOR (intent,error)
    signature (same failure, ZERO new information). **RESET that intent's strike count to 0** whenever
    an attempt surfaces a NEW error-hash, a new diagnostic fact, or a new hypothesis — that is productive
-   iteration, NOT a strike. **STOP + escalate (dropdown), do NOT reschedule, ONLY when the SAME
+   iteration, NOT a strike. **STOP → write `.autonom/ABORT` + report at end (no dropdown), do NOT reschedule, ONLY when the SAME
    (intent,error) signature recurs 3×.** Backstops: (a) HARD cap `N_total ≤ 8` attempts per bare intent
    → escalate; (b) cycle-detection — if the last 4 DISTINCT error-hashes form a repeating set, treat as
    stuck even if each looks "new". No-progress detector: 3 turns with zero todo delta AND zero new
@@ -170,7 +172,8 @@ assumption_budget, critical_assumption, blast_radius, mutation_surfaces}`.
     rises or stays flat for N steps → abort as non-converging, even if `done?` never trips. A termination proof
     against infinite loops, independent of the strike logic.
 
-> **ZERO mid-run interrupts.** Runs UNINTERRUPTED to DONE — the user is NEVER pulled back in mid-run: no "still
+> **ZERO mid-run interrupts.** Every halt/abort/escalate in this skill writes `.autonom/ABORT`, STOPS, and reports
+> at the END — NEVER a mid-run dropdown. That is the literal contract. Runs UNINTERRUPTED to DONE — the user is NEVER pulled back in mid-run: no "still
 > on track?" dropdowns AND no safety-gate dropdowns. Dangerous action-classes are PRE-AUTHORIZED (or denied) ONCE
 > at the SCOPE step; anything dangerous NOT pre-authorized is DEFERRED + reported at DONE, never asked. Missing
 > info is resolved CLARIFY-FIRST (the agent self-answers from task context), only a genuinely user-only fact is
@@ -190,7 +193,9 @@ does NOT need to reach DONE. Before deferring a non-pre-authorized dangerous act
 = is it REQUIRED for any DONE criterion?
 - `!allowed && necessary` → **FAIL LOUDLY** (abort + report `blocked-required: <action>`); NEVER defer — deferring
   a REQUIRED action silently turns IMPOSSIBLE into apparently-DONE.
-- `!allowed && !necessary` → DEFER (log, report at DONE), continue.
+- `!allowed && !necessary` → DEFER **with a one-line proof** (`DONE criterion [X] checks [Y]; this action affects
+  [Z], not in any criterion`), log + continue. At DONE-time, if DONE turns out unreachable, surface ALL such proofs
+  for audit before accepting FAIL — a mis-judged "not necessary" is itself a silent-failure path.
 - `allowed` → execute.
 
 **Capability-scoped permissions (not a bare class flag).** Each pre-authorization carries SCOPE, so "approve push"
@@ -202,10 +207,10 @@ a prod publish is treated as NOT pre-authorized → routed through `necessary?` 
 - **Silent-destruction floor.** AUTO-BLOCK (or DEFER if the run wasn't pre-authorized for destruction) any action that truncates a tracked file (>50% size
   reduction), zeroes a file, or changes perms/ownership (`chmod`/`chown`/`icacls`). A plain delete-gate does NOT
   cover these — an unattended run could brick a config without surfacing.
-- **Strict execution allowlist (NOT an LLM eval).** `allowed?` is enforced by a hardcoded binary allowlist
-  (`git`, `npm`, `node`, `python <named-script>`, `pytest`, …), NOT a semantic LLM check (string-match is
-  bypassable via indirection). Any shell containing `python -c` / `bash -c` / `eval`, or executing a
-  dynamically-written or temp file, auto-blocks as a hard gate.
+- **Strict pattern-match allowlist (honest: it IS an LLM match, just a crisp one).** `allowed?` matches the command
+  against an explicit allowlist (`git`, `npm`, `node`, `python <named-script>`, `pytest`, …). MECHANICAL backstops
+  that need zero judgment: any command with `python -c` / `bash -c` / `eval`, a dynamically-written or temp file, OR
+  **2+ chained shell operators** (`|` `&&` `;` `>` `$(`) auto-blocks → break it into separate allowed calls.
 - **Dependency-install gate.** Treat `npm/pip/cargo/... install <pkg>` with the same severity as a git push —
   DEFER unless pre-authorized at scope (supply-chain + env-break risk); best run inside the shadow/ephemeral env below.
 - **Flaky-test escape hatch.** Track `resets_per_criterion` in state; if a `git reset --hard` fires for the SAME
@@ -217,17 +222,20 @@ a prod publish is treated as NOT pre-authorized → routed through `necessary?` 
 - Hard reasoning → a strong reasoning lane; bulk/classify → a local LLM. Main model = orchestration + final verify only.
 - Before each non-trivial sub-step: pick the right skill/script/lane for it (capability lookup).
 
-## Each-turn checklist (autonomous phase)
-- **Top-of-turn guards:** `.autonom/ABORT`? (stop) · read state (atomic) · resume incomplete `intent` ·
-  cross-run error-journal auto-fix · stale-state recheck (>6h) · working-tree dirty check · spec-drift diff ·
-  budget % (stop if cap hit) · loop check (intent/error 3-strikes / no-progress) · infeasibility check.
-- Re-read spec + DONE condition FROM STATE (not the prompt).
-- Pick next concrete sub-step. `git tag autonom/pre-<intent_hash>` before mutating. Consult the advisor
-  (scope-prefixed, quarantined, capped) when it helps — out-of-spec advice → DEFER, in-spec applies → log.
-- Write `intent` → advance → verify via the authority allowlist; on fail → classify + `git reset --hard` the tag; clear `intent`.
-- Track progress. Update `attempts`/`spent`/`seen_errors`/`web_lane_calls`. Min-viable-progress check.
-- Emit the 1-line delta header. If DONE → re-verify ALL criteria + evidence block → cancel Monitors → report.
-  Else → write state (atomic), schedule the wakeup (fuse prompt, delaySeconds per table), end turn.
+## Each turn — 3 phases (GUARD → ACT → CLOSE)
+Keep the turn to THREE phases; the detailed sub-rules live in §Reference and are read ONLY when a GUARD flag trips
+(don't run 25 checks every turn — adherence degrades faster than coverage improves).
+- **GUARD (≤5 fast checks):** (1) `.autonom/ABORT`? → stop. (2) read state (atomic) + resume an incomplete `intent`.
+  (3) env/spec drift — stale-state >6h | dirty-tree | spec-drift. (4) budget / loop / infeasible (loop + convergence +
+  hypothesis detail in §Reference, consulted ONLY if a strike / no-progress flag trips). (5) for the chosen action:
+  `allowed?` + `necessary?` + mutation-surface. **Any STOP condition → write `.autonom/ABORT`, halt, report at DONE —
+  never a dropdown.**
+- **ACT (one minimal step):** pick the MINIMAL next action (Plan-minimizer) → `git tag autonom/pre-<intent>` → write
+  `intent` → execute. Consult the advisor (scope-prefixed, quarantined) ONLY when stuck.
+- **CLOSE:** verify via the authority allowlist; on fail → classify + `git reset --hard` the tag + clear `intent`.
+  Update state atomically (`attempts`/`spent`/`seen_errors`/`assumptions`). Emit the 1-line delta header. If DONE →
+  run the FALSE_DONE checklist + re-verify ALL criteria + evidence block → cancel Monitors → report. Else → schedule
+  the wakeup (fuse, delaySeconds per §Reference table).
 
 ## Design lineage
 Combines three primitives: a front-loaded **scoping** pass (ask everything first), a self-paced
