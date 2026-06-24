@@ -59,19 +59,19 @@ runs until the task is genuinely complete, pulling a web-LLM advisor in each ite
 - **Split `done?` from `allowed?`.** Two distinct predicates: a `## Done criteria` block (observable success,
   checked POST-action) and a `## Guardrails` block (action allow/deny: forbidden paths/commands/actions, checked
   PRE-action). Run `allowed?(action)` before EVERY tool call and `done?(state)` after each step. A state whose only
-  progressing action is disallowed → escalate, never silently treat as done.
+  progressing action is disallowed → write `.autonom/ABORT`, never silently treat as done.
 - **Goal-derived state schema.** Do not force one fixed `state.json` shape — derive the keys from (intent,
   done_criteria) at turn 1, store as `state_schema`, read/write per it (a PR-babysitter tracks open PRs + last SHA;
   a migration tracks files done/remaining).
 - **Plan minimizer.** Each turn, before acting: "what is the MINIMAL next action that yields observable progress?"
   Do only that, then re-evaluate. Stops 20-step plans where one step suffices.
-- **Shadow-execution mode (optional).** For repo-scoped tasks, `git worktree add .autonom/shadow HEAD` at turn 1
+- **Shadow-execution mode (DEFAULT for repo mutations — see §Operational floors).** For repo-scoped tasks, `git worktree add .autonom/shadow HEAD` at turn 1
   and run ALL mutations in the shadow worktree. On full DONE verification → merge shadow to main; on verify-fail →
   discard the worktree (instant, zero `git reset --hard` risk to the user's real tree). An ephemeral venv/container
   per task extends this to dependency + OS-state isolation (nuke on fail/out-of-scope).
   CONCRETELY (else it's aspirational): at turn 1 set `GIT_DIR=.autonom/shadow/.git` + `GIT_WORK_TREE=.autonom/shadow`
   for the session and route every edited path through the shadow root. If you can't commit to that remapping, treat
-  shadow-exec as EXPERIMENTAL and do NOT claim repo isolation for this run.
+  shadow-exec — log an explicit opt-out and do NOT claim repo isolation for this run.
 
 ## Wrong-success guards (the real risk is confident wrong-success, not loops)
 The no-interrupt model's dominant failure is "the agent successfully does the WRONG thing and still passes its own
@@ -134,13 +134,13 @@ assumption_budget, critical_assumption, blast_radius, mutation_surfaces}`.
    an attempt surfaces a NEW error-hash, a new diagnostic fact, or a new hypothesis — that is productive
    iteration, NOT a strike. **STOP → write `.autonom/ABORT` + report at end (no dropdown), do NOT reschedule, ONLY when the SAME
    (intent,error) signature recurs 3×.** Backstops: (a) HARD cap `N_total ≤ 8` attempts per bare intent
-   → escalate; (b) cycle-detection — if the last 4 DISTINCT error-hashes form a repeating set, treat as
+   → write `.autonom/ABORT`; (b) cycle-detection — if the last 4 DISTINCT error-hashes form a repeating set, treat as
    stuck even if each looks "new". No-progress detector: 3 turns with zero todo delta AND zero new
    error-hash → halt. **HYPOTHESIS forcing-function** — after each failure emit a normalized
    `HYPOTHESIS:` (one line: WHY the next attempt will differ); strike on the `(intent+hypothesis)`
    fingerprint with `MAX_STRIKES_PER_STRATEGY=2`; if it cannot produce a hypothesis DISTINCT from all
-   prior ones → escalate. **Per-intent resource bound** — `MAX_WALL_TIME_PER_INTENT=300s` +
-   `MAX_TOKENS_PER_INTENT=100k` → escalate on either, independent of strike caps.
+   prior ones → write `.autonom/ABORT`. **Per-intent resource bound** — `MAX_WALL_TIME_PER_INTENT=300s` +
+   `MAX_TOKENS_PER_INTENT=100k` → write `.autonom/ABORT` on either, independent of strike caps.
 2. **Min-viable-progress/turn.** Every turn MUST yield ≥1 of {todo delta · file edit · git commit ·
    DONE report} — else it's a wasted spin → write `.autonom/ABORT` with a "stuck, no progress" diagnostic.
 3. **Budget cap.** Track `spent` + `web_lane_calls`; report % each turn (in the delta header); **HARD-STOP
