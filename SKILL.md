@@ -64,6 +64,10 @@ runs until the task is genuinely complete, pulling a web-LLM advisor in each ite
   a migration tracks files done/remaining).
 - **Plan minimizer.** Each turn, before acting: "what is the MINIMAL next action that yields observable progress?"
   Do only that, then re-evaluate. Stops 20-step plans where one step suffices.
+- **Shadow-execution mode (optional).** For repo-scoped tasks, `git worktree add .autonom/shadow HEAD` at turn 1
+  and run ALL mutations in the shadow worktree. On full DONE verification → merge shadow to main; on verify-fail →
+  discard the worktree (instant, zero `git reset --hard` risk to the user's real tree). An ephemeral venv/container
+  per task extends this to dependency + OS-state isolation (nuke on fail/out-of-scope).
 
 ## State (single source of truth — atomic)
 Maintain `.autonom/state.json` from turn 1. Schema:
@@ -154,6 +158,19 @@ Even in autonomous mode, pause and ASK before: deletions (move to `.retired/` + 
 pushes, sending comms, publishing public content, paid-API calls, purchases, anything destructive or
 outward-facing. Surface, dropdown, wait. On the user's answer → write `pending_gate_resolution`, clear
 `intent`, schedule a wakeup (delaySeconds=5).
+
+**Added gates (adversarial-review hardening):**
+- **Silent-destruction gate.** Also pause for a dropdown on any action that truncates a tracked file (>50% size
+  reduction), zeroes a file, or changes perms/ownership (`chmod`/`chown`/`icacls`). A plain delete-gate does NOT
+  cover these — an unattended run could brick a config without surfacing.
+- **Strict execution allowlist (NOT an LLM eval).** `allowed?` is enforced by a hardcoded binary allowlist
+  (`git`, `npm`, `node`, `python <named-script>`, `pytest`, …), NOT a semantic LLM check (string-match is
+  bypassable via indirection). Any shell containing `python -c` / `bash -c` / `eval`, or executing a
+  dynamically-written or temp file, auto-blocks as a hard gate.
+- **Dependency-install gate.** Treat `npm/pip/cargo/... install <pkg>` with the same severity as a git push —
+  surface + dropdown (supply-chain + env-break risk). Best run inside the shadow/ephemeral env below.
+- **Flaky-test escape hatch.** Track `resets_per_criterion` in state; if a `git reset --hard` fires for the SAME
+  acceptance criterion 3× → HALT, do NOT reset again, escalate "potential flaky env / non-deterministic test."
 
 ## Routing (free-first)
 - Heavy code / multi-file authoring → a code-capable free lane draft → main-model skim; long prose → free lane.
