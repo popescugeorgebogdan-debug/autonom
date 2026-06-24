@@ -48,6 +48,23 @@ runs until the task is genuinely complete, pulling a web-LLM advisor in each ite
    append the failing criterion as a new todo, continue the loop. When all pass → emit the DONE-evidence
    block, cancel ALL tracked Monitors, do NOT reschedule, report. Also stop on the kill switch / interrupt.
 
+## Initialization + design gates
+- **Manifest-only init.** If handed a `task_manifest.json` (e.g. from a scoping skill like `/askme`), that JSON
+  is the ONLY init payload — `{goal, verification, guardrails, state_schema, out_of_scope, executor}`. Reject
+  prose-only init; if no manifest exists, run the §Contract scope to PRODUCE one before turn 1.
+- **Classify DONE + dead-man switch.** Tag the DONE check as `deterministic` (cmd rc=0 + optional output regex),
+  `fuzzy` (AI-judge rubric + threshold + a reject example), or `browser` (HAR / accessibility-tree baseline diff).
+  If `done?` fails 3× with DIFFERENT outputs (not one stable error) → ABORT and report; do not ping-pong.
+- **Split `done?` from `allowed?`.** Two distinct predicates: a `## Done criteria` block (observable success,
+  checked POST-action) and a `## Guardrails` block (action allow/deny: forbidden paths/commands/actions, checked
+  PRE-action). Run `allowed?(action)` before EVERY tool call and `done?(state)` after each step. A state whose only
+  progressing action is disallowed → escalate, never silently treat as done.
+- **Goal-derived state schema.** Do not force one fixed `state.json` shape — derive the keys from (intent,
+  done_criteria) at turn 1, store as `state_schema`, read/write per it (a PR-babysitter tracks open PRs + last SHA;
+  a migration tracks files done/remaining).
+- **Plan minimizer.** Each turn, before acting: "what is the MINIMAL next action that yields observable progress?"
+  Do only that, then re-evaluate. Stops 20-step plans where one step suffices.
+
 ## State (single source of truth — atomic)
 Maintain `.autonom/state.json` from turn 1. Schema:
 `{task, done_condition, spec, scope_boundary, turn, last_updated, budget:{turns_max,tokens_max,usd_max,
@@ -119,6 +136,14 @@ pending_gate_resolution, wakeup_failed, last_verified}`.
     (report at DONE), keep driving the scoped task. Spec-drift diff at turn top → self-correct back to spec silently.
 16. **Periodic plan-validity re-check.** Every 10 turns, re-derive the plan from spec+state, diff vs the original
     numbered steps; if >30% of original steps are no longer relevant → halt + re-plan.
+17. **Prediction log.** Each action states a one-line prediction of the observable change it should cause ("after
+    this edit, `pytest -k X` passes"). A prediction/observation MISMATCH triggers re-plan (evidence-based), not
+    merely a strike — sharpens the stuck-vs-productive call beyond the error-hash alone.
+18. **Differential verification.** `done?` checks INVARIANTS, not just final state: tests pass AND no new warnings
+    AND only intended files changed AND no new dependencies added. Catches silent regressions a single check waves through.
+19. **Monotonic convergence metric.** Define a progress metric that must decrease (e.g. failing-test count); if it
+    rises or stays flat for N steps → abort as non-converging, even if `done?` never trips. A termination proof
+    against infinite loops, independent of the strike logic.
 
 > **No periodic check-ins.** Runs UNINTERRUPTED to DONE — no "still on track?" dropdowns. The ONLY mid-run
 > interruptions are the safety hard-gates below. Per-turn user-visible delta header:

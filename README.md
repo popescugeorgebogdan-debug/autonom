@@ -32,7 +32,7 @@ command on a recurring interval (e.g. /loop 5m /foo). Omit the interval to let t
 That is a timer. As a way to actually **finish** a multi-step task it is, in my blunt opinion,
 garbage, and that is fine: a timer was never meant to be a worker. It has no definition of done, no
 memory of why the last attempt failed, and no way to undo a change it just broke. `/autonom` is the
-worker. Concretely, in a ~150-line skill file:
+worker. Concretely, in a ~180-line skill file:
 
 1. **Scope-first, refuse-if-unscoped.** It asks every outcome-determining question (one dropdown at
    a time) *before* touching anything, and **refuses to start unless the definition of DONE is
