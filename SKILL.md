@@ -19,7 +19,7 @@ runs until the task is genuinely complete, pulling a web-LLM advisor in each ite
 1. **SCOPE FIRST (ASK).** Before any work, ask the user — via dropdowns, ONE question per call —
    every outcome-determining question until nothing ambiguous remains: goal, definition-of-DONE
    (the explicit completion signal), constraints, scope boundaries, files/systems in play,
-   acceptance criteria, what NOT to touch, and the **budget** (max turns / tokens / $). Ask as
+   acceptance criteria, what NOT to touch, the **pre-authorized dangerous action-classes** (which of push / delete / publish / install / paid the run may do unattended — approved ONCE here so the run never interrupts later), and the **budget** (max turns / tokens / $). Ask as
    MANY as needed. Do not start until unambiguous.
 2. **CONFIRM THE SPEC + ENFORCE CHECKABLE DONE (design-time guard — sharpest single lever).** Echo
    the full scoped spec in one block. The **DONE condition MUST be machine-checkable assertions**
@@ -149,18 +149,23 @@ pending_gate_resolution, wakeup_failed, last_verified}`.
     rises or stays flat for N steps → abort as non-converging, even if `done?` never trips. A termination proof
     against infinite loops, independent of the strike logic.
 
-> **No periodic check-ins.** Runs UNINTERRUPTED to DONE — no "still on track?" dropdowns. The ONLY mid-run
-> interruptions are the safety hard-gates below. Per-turn user-visible delta header:
+> **ZERO mid-run interrupts.** Runs UNINTERRUPTED to DONE — the user is NEVER pulled back in mid-run: no "still
+> on track?" dropdowns AND no safety-gate dropdowns. Dangerous action-classes are PRE-AUTHORIZED (or denied) ONCE
+> at the SCOPE step; anything dangerous NOT pre-authorized is DEFERRED + reported at DONE, never asked. Missing
+> info is resolved CLARIFY-FIRST (the agent self-answers from task context), only a genuinely user-only fact is
+> deferred. Per-turn user-visible delta header:
 > `T<turn>/<max> | step k/n ✓verified | budget: a% turns, b% $ | c deferred`.
 
-## Hard gates that STILL require a user dropdown mid-run (never auto)
-Even in autonomous mode, pause and ASK before: deletions (move to `.retired/` + log), git mutations /
-pushes, sending comms, publishing public content, paid-API calls, purchases, anything destructive or
-outward-facing. Surface, dropdown, wait. On the user's answer → write `pending_gate_resolution`, clear
-`intent`, schedule a wakeup (delaySeconds=5).
+## Dangerous actions — decided at SCOPE, never an interrupt mid-run
+Dangerous action-classes — deletions (move to `.retired/` + log), git mutations / pushes, sending comms,
+publishing public content, paid-API calls, purchases, anything destructive or outward-facing — are decided ONCE,
+at the SCOPE step: the manifest's `permissions` block lists which classes are PRE-AUTHORIZED for this run. During
+the run there is ZERO user interruption — a pre-authorized class just runs (subject to the automatic safety floors
+below, which BLOCK or DEFER, never prompt); a dangerous action NOT pre-authorized at scope is DEFERRED (logged to
+`deferred_ideas`, reported at DONE) and the run continues. The ONE approval moment is the scope gate.
 
 **Added gates (adversarial-review hardening):**
-- **Silent-destruction gate.** Also pause for a dropdown on any action that truncates a tracked file (>50% size
+- **Silent-destruction floor.** AUTO-BLOCK (or DEFER if the run wasn't pre-authorized for destruction) any action that truncates a tracked file (>50% size
   reduction), zeroes a file, or changes perms/ownership (`chmod`/`chown`/`icacls`). A plain delete-gate does NOT
   cover these — an unattended run could brick a config without surfacing.
 - **Strict execution allowlist (NOT an LLM eval).** `allowed?` is enforced by a hardcoded binary allowlist
@@ -168,7 +173,7 @@ outward-facing. Surface, dropdown, wait. On the user's answer → write `pending
   bypassable via indirection). Any shell containing `python -c` / `bash -c` / `eval`, or executing a
   dynamically-written or temp file, auto-blocks as a hard gate.
 - **Dependency-install gate.** Treat `npm/pip/cargo/... install <pkg>` with the same severity as a git push —
-  surface + dropdown (supply-chain + env-break risk). Best run inside the shadow/ephemeral env below.
+  DEFER unless pre-authorized at scope (supply-chain + env-break risk); best run inside the shadow/ephemeral env below.
 - **Flaky-test escape hatch.** Track `resets_per_criterion` in state; if a `git reset --hard` fires for the SAME
   acceptance criterion 3× → HALT, do NOT reset again, escalate "potential flaky env / non-deterministic test."
 
