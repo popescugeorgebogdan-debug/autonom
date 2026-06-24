@@ -77,7 +77,7 @@ deferred_ideas:[{idea,deferred_at}], monitors_armed:[{id,purpose,armed_at_turn}]
 pending_gate_resolution, wakeup_failed, last_verified}`.
 - **Atomic writes ONLY:** write `state.json.tmp` → fsync → `os.replace` (never a partial file). Same for the `ABORT` sentinel.
 - **Spec re-read from STATE at turn top, never from the prompt** (the prompt is a fuse).
-- **Compaction:** `seen_errors` + `applied_advice` FIFO-evict at 100; `deferred_ideas` cap 10 (drop oldest, log) + auto-expire after 24h; surface top-3 deferred at DONE.
+- **Compaction:** `seen_errors` + `applied_advice` FIFO-evict at 100; `deferred_ideas` SPLIT into `deferred_required` (NEVER evicted or expired) vs `deferred_optional` (cap 10, drop oldest + auto-expire 24h); at DONE surface top-3 optional AND every `deferred_required` prominently.
 - **Cross-run error journal** `.autonom/error_journal.json` (PERSISTS across invocations): `{error_hash: {recipe, fixed_n}}`. Turn-1 reads it and auto-applies known fixes (e.g. "port in use", "missing env var") instead of re-discovering them every run.
 
 ## Autonomous-run robustness (ranked by impact)
@@ -163,6 +163,19 @@ at the SCOPE step: the manifest's `permissions` block lists which classes are PR
 the run there is ZERO user interruption — a pre-authorized class just runs (subject to the automatic safety floors
 below, which BLOCK or DEFER, never prompt); a dangerous action NOT pre-authorized at scope is DEFERRED (logged to
 `deferred_ideas`, reported at DONE) and the run continues. The ONE approval moment is the scope gate.
+
+**`necessary?` predicate — the key that makes zero-interrupt SAFE.** DEFER is only safe for an action the task
+does NOT need to reach DONE. Before deferring a non-pre-authorized dangerous action, evaluate `necessary?(action)`
+= is it REQUIRED for any DONE criterion?
+- `!allowed && necessary` → **FAIL LOUDLY** (abort + report `blocked-required: <action>`); NEVER defer — deferring
+  a REQUIRED action silently turns IMPOSSIBLE into apparently-DONE.
+- `!allowed && !necessary` → DEFER (log, report at DONE), continue.
+- `allowed` → execute.
+
+**Capability-scoped permissions (not a bare class flag).** Each pre-authorization carries SCOPE, so "approve push"
+can't hit the wrong target: `permissions: {push:{remote:origin, branch:feature/*, max_pushes:1}, install:{packages:[pytest,requests]}, publish:{environment:staging}}`.
+`allowed?(action)` matches the action against the SCOPED capability; an out-of-scope push, an unlisted package, or
+a prod publish is treated as NOT pre-authorized → routed through `necessary?` above.
 
 **Added gates (adversarial-review hardening):**
 - **Silent-destruction floor.** AUTO-BLOCK (or DEFER if the run wasn't pre-authorized for destruction) any action that truncates a tracked file (>50% size
