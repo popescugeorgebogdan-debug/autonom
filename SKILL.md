@@ -89,7 +89,9 @@ machine-checkable DONE." These four guards target exactly that:
 - **Mutation-surface classification (shadow ≠ global safety).** The shadow worktree protects ONLY repo/filesystem state.
   Tag every mutating action by surface — `repo · filesystem · network · cloud · SaaS/external-API · comms` — and require
   an isolation/rollback strategy PER surface (shadow for repo; dry-run/staging target or scoped pre-auth for
-  network/cloud/SaaS/comms — `git reset` does NOT undo these). An action on an unisolated external surface without a
+  network/cloud/SaaS/comms — `git reset` does NOT undo these). **For every external-surface mutation, PRE-REGISTER a
+  compensating/rollback action before executing; on ABORT run the compensations in reverse order** (repo is covered by
+  `git reset`; external surfaces are not). An action on an unisolated external surface without a
   pre-authorized scope is `necessary?`-routed (FAIL if required for DONE).
 - **Pre-run design review (critical-assumption + blast-radius).** Before turn 1, self-review the plan and NAME the single
   `critical_assumption` (what, if wrong, ruins the whole run) + the `blast_radius` (worst-case surfaces touched). Both go
@@ -207,6 +209,8 @@ does NOT need to reach DONE. Before deferring a non-pre-authorized dangerous act
 can't hit the wrong target: `permissions: {push:{remote:origin, branch:feature/*, max_pushes:1}, install:{packages:[pytest,requests]}, publish:{environment:staging}}`.
 `allowed?(action)` matches the action against the SCOPED capability; an out-of-scope push, an unlisted package, or
 a prod publish is treated as NOT pre-authorized → routed through `necessary?` above.
+**Mechanical target validator:** before any scoped dangerous action, COMPUTE the actual target (real remote/branch/
+package/env) and ASSERT it matches the scope — never rely on LLM parsing alone; a mismatch → treated as NOT pre-authorized.
 
 **Added gates (adversarial-review hardening):**
 - **Silent-destruction floor.** AUTO-BLOCK (or DEFER if the run wasn't pre-authorized for destruction) any action that truncates a tracked file (>50% size
@@ -235,12 +239,18 @@ Keep the turn to THREE phases; the detailed sub-rules live in §Reference and ar
   hypothesis detail in §Reference, consulted ONLY if a strike / no-progress flag trips). (5) for the chosen action:
   `allowed?` + `necessary?` + mutation-surface. **Any STOP condition → write `.autonom/ABORT`, halt, report at DONE —
   never a dropdown.**
-- **ACT (one minimal step):** pick the MINIMAL next action (Plan-minimizer) → `git tag autonom/pre-<intent>` → write
-  `intent` → execute. Consult the advisor (scope-prefixed, quarantined) ONLY when stuck.
-- **CLOSE:** verify via the authority allowlist; on fail → classify + `git reset --hard` the tag + clear `intent`.
-  Update state atomically — when recording a FAILURE, update `attempts` per §Reference item-1 logic (error-hash-keyed,
-  reset on a new diagnostic/hypothesis) so GUARD only reads an already-correct count (`spent`/`seen_errors`/`assumptions` too).
-  Emit the 1-line delta header. If DONE →
+- **ACT (one minimal step):** pick the MINIMAL next action (Plan-minimizer) → state a one-line PREDICTION of the
+  observable change it should cause (§Reference prediction-log — run on EVERY action, NOT flag-gated) →
+  `git tag autonom/pre-<intent>` → write `intent` → execute. Consult the advisor (scope-prefixed, quarantined) ONLY when stuck.
+- **CLOSE (proactive controls run EVERY turn, never flag-gated):** verify via the authority allowlist + **differential
+  verification** (tests pass AND no new warnings AND only intended files changed AND no new deps) + confirm the
+  PREDICTION held; on fail → classify + `git reset --hard` the tag + clear `intent`. Update the **monotonic-convergence
+  metric** (must trend down; flat/up for N turns → write `.autonom/ABORT`). Update state atomically — when recording a
+  FAILURE, update `attempts` per §Reference item-1 logic (error-hash-keyed, reset on a new diagnostic/hypothesis) so GUARD
+  reads an already-correct count (`spent`/`seen_errors`/`assumptions` too). **Write `.autonom/status.json`** (state ·
+  last_turn_at · eta · next_action) so the run is inspectable without interrupting. **Every 10 turns:** plan-validity
+  re-check + a **GOAL_COHERENCE check** — summarize the current deliverable vs the ORIGINAL high-level goal; on
+  drift or criteria-gaming → write `.autonom/ABORT` (catches passing a wrong/incomplete DONE). Emit the 1-line delta header. If DONE →
   run the FALSE_DONE checklist + re-verify ALL criteria + evidence block → cancel Monitors → report. Else → schedule
   the wakeup (fuse, delaySeconds per §Reference table).
 
