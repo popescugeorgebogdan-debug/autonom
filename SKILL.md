@@ -31,7 +31,8 @@ runs until the task is genuinely complete, pulling a web-LLM advisor in each ite
    required CLI tools installed · spec-named files exist · working tree clean · required env vars set ·
    the DONE test command actually runs. Failing fast here is 100× cheaper than discovering it on turn 5.
 4. **WORK AUTONOMOUSLY, NON-STOP.** After "Start", DO NOT ask the user. Drive to completion across
-   as many turns as needed. No per-step gates, no check-ins — EXCEPT the safety hard-gates below.
+   as many turns as needed. No per-step gates, no check-ins. Mechanical safety conditions (§Reference) write
+   `.autonom/ABORT` and stop — they NEVER prompt.
 5. **CONSULT A WEB-LLM ADVISOR OFTEN (scope-bounded, quarantined).** Each iteration, use a web-LLM
    for advice/optimization/new angles — especially when stuck or a result looks suboptimal.
    **Prefix every autonomous advisory prompt** with: *"ADVISORY ONLY — do NOT suggest work outside
@@ -68,6 +69,9 @@ runs until the task is genuinely complete, pulling a web-LLM advisor in each ite
   and run ALL mutations in the shadow worktree. On full DONE verification → merge shadow to main; on verify-fail →
   discard the worktree (instant, zero `git reset --hard` risk to the user's real tree). An ephemeral venv/container
   per task extends this to dependency + OS-state isolation (nuke on fail/out-of-scope).
+  CONCRETELY (else it's aspirational): at turn 1 set `GIT_DIR=.autonom/shadow/.git` + `GIT_WORK_TREE=.autonom/shadow`
+  for the session and route every edited path through the shadow root. If you can't commit to that remapping, treat
+  shadow-exec as EXPERIMENTAL and do NOT claim repo isolation for this run.
 
 ## Wrong-success guards (the real risk is confident wrong-success, not loops)
 The no-interrupt model's dominant failure is "the agent successfully does the WRONG thing and still passes its own
@@ -119,14 +123,14 @@ assumption_budget, critical_assumption, blast_radius, mutation_surfaces}`.
    prior ones → escalate. **Per-intent resource bound** — `MAX_WALL_TIME_PER_INTENT=300s` +
    `MAX_TOKENS_PER_INTENT=100k` → escalate on either, independent of strike caps.
 2. **Min-viable-progress/turn.** Every turn MUST yield ≥1 of {todo delta · file edit · git commit ·
-   hard-gate dropdown · DONE report} — else it's a wasted spin → halt with a "stuck, no progress" diagnostic.
+   DONE report} — else it's a wasted spin → write `.autonom/ABORT` with a "stuck, no progress" diagnostic.
 3. **Budget cap.** Track `spent` + `web_lane_calls`; report % each turn (in the delta header); **HARD-STOP
    when any cap hit.** Advisory calls are $0 API but burn orchestration tokens — count them against the cap.
 4. **Infeasibility threshold.** Halt + report "task may be infeasible — recommend re-scoping" when
    `count(intents with same-(intent,error) attempts≥3) ≥ 3` OR (`budget.spent > 75%` AND `todos.done/total < 50%`).
 5. **Kill switch.** Check `.autonom/ABORT` at the TOP of every turn → stop immediately, cancel Monitors, report.
 6. **Failure taxonomy + tag rollback.** Classify each verify-fail: transient (retry w/ capped backoff) ·
-   logical (re-plan substep) · environmental (escalate) · scope (defer). **Before any mutating substep:
+   logical (re-plan substep) · environmental (write `.autonom/ABORT` + report) · scope (defer). **Before any mutating substep:
    `git tag autonom/pre-<intent_hash>` on HEAD; on verify-fail `git reset --hard autonom/pre-<intent_hash>`;
    sweep tags every 10 successful steps.**
 7. **Idempotency + crash recovery.** Write `intent` BEFORE acting, clear after. Turn-top: if `intent` set +
@@ -141,7 +145,6 @@ assumption_budget, critical_assumption, blast_radius, mutation_surfaces}`.
    | Made progress, no external wait | 60 |
    | Retrying after error (attempt n) | `min(60×2^n, 600)` |
    | Waiting on external event | don't wakeup — arm a Monitor |
-   | Hard-gate pending user answer | 5 (resume right after) |
    | No progress this turn | 120 (cool-down) |
 
 10. **Wakeup failure backstop.** Wrap the wakeup: on failure retry once (+30s); on 2nd failure set
@@ -195,7 +198,9 @@ does NOT need to reach DONE. Before deferring a non-pre-authorized dangerous act
   a REQUIRED action silently turns IMPOSSIBLE into apparently-DONE.
 - `!allowed && !necessary` → DEFER **with a one-line proof** (`DONE criterion [X] checks [Y]; this action affects
   [Z], not in any criterion`), log + continue. At DONE-time, if DONE turns out unreachable, surface ALL such proofs
-  for audit before accepting FAIL — a mis-judged "not necessary" is itself a silent-failure path.
+  for audit. Since a stuck-loop ABORT usually fires FIRST, the loop-ABORT report (§Reference item 1) MUST also scan
+  `deferred_ideas` for a `!necessary` deferral as a candidate root cause — the audit is a POST-halt diagnostic, not a
+  pre-halt gate (a mis-judged "not necessary" is itself a silent-failure path).
 - `allowed` → execute.
 
 **Capability-scoped permissions (not a bare class flag).** Each pre-authorization carries SCOPE, so "approve push"
@@ -233,7 +238,9 @@ Keep the turn to THREE phases; the detailed sub-rules live in §Reference and ar
 - **ACT (one minimal step):** pick the MINIMAL next action (Plan-minimizer) → `git tag autonom/pre-<intent>` → write
   `intent` → execute. Consult the advisor (scope-prefixed, quarantined) ONLY when stuck.
 - **CLOSE:** verify via the authority allowlist; on fail → classify + `git reset --hard` the tag + clear `intent`.
-  Update state atomically (`attempts`/`spent`/`seen_errors`/`assumptions`). Emit the 1-line delta header. If DONE →
+  Update state atomically — when recording a FAILURE, update `attempts` per §Reference item-1 logic (error-hash-keyed,
+  reset on a new diagnostic/hypothesis) so GUARD only reads an already-correct count (`spent`/`seen_errors`/`assumptions` too).
+  Emit the 1-line delta header. If DONE →
   run the FALSE_DONE checklist + re-verify ALL criteria + evidence block → cancel Monitors → report. Else → schedule
   the wakeup (fuse, delaySeconds per §Reference table).
 
