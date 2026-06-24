@@ -1,27 +1,13 @@
-# 👁️➜🤖 /autonom — give your AI agent *autonomy*, not just reach
+# 🤖 /autonom — the Claude Code skill that actually finishes the job
 
 A [Claude Code](https://docs.anthropic.com/en/docs/claude-code) skill that does one thing well:
 **scope a task exhaustively up front, then work on it autonomously, non-stop, until it hits a
-machine-checkable definition of DONE** — pausing only for a small set of non-negotiable safety gates.
+machine-checkable definition of DONE** — with zero mid-run interruptions.
 
-Most "agentic" tooling races to give an agent more **reach** (read the whole web, call more APIs).
-`/autonom` is the other axis: **autonomy** — the discipline to *finish a job by itself* without
-babysitting, and without the two ways unattended agents usually fail (drifting off-scope, or
-spinning forever on the same error while reporting "progress").
-
----
-
-## The idea in one table
-
-|  | "Reach" tools | **/autonom** ("autonomy") |
-|---|---|---|
-| What they add | the agent can *see/fetch* more (X, Reddit, GitHub, YouTube…) | the agent can *finish a scoped task* unattended |
-| Shape | external data-access CLIs/MCPs | an orchestration skill (scope → loop → verify) |
-| Failure they fix | "my agent is blind / rate-limited" | "my agent wanders or loops, and I have to watch it" |
-| One-liner | *eyes to see the internet* | *hands to finish the job* |
-
-They're complementary. Reach without autonomy still needs a human driving every step; autonomy
-without reach finishes the wrong things confidently. This repo is the autonomy half.
+It gives an agent the discipline to *finish a job by itself* without babysitting, and without the two
+ways unattended agents usually fail: drifting off-scope, or spinning forever on the same error while
+reporting "progress". It scopes the task with you, then runs unattended to a definition of done a
+machine can actually check.
 
 ---
 
@@ -32,7 +18,7 @@ command on a recurring interval (e.g. /loop 5m /foo). Omit the interval to let t
 That is a timer. As a way to actually **finish** a multi-step task it is, in my blunt opinion,
 garbage, and that is fine: a timer was never meant to be a worker. It has no definition of done, no
 memory of why the last attempt failed, and no way to undo a change it just broke. `/autonom` is the
-worker. Concretely, in a ~180-line skill file:
+worker. Concretely, in a ~280-line skill file (hardened by five adversarial AI reviews):
 
 1. **Scope-first, refuse-if-unscoped.** It asks every outcome-determining question (one dropdown at
    a time) *before* touching anything, and **refuses to start unless the definition of DONE is
